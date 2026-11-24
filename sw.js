@@ -1,6 +1,6 @@
 /* 保固維修回報 service worker：讓 App 可以安裝到桌面／主畫面。
  * 只快取 App 本身的檔案（先連網、斷線才用快取），GitHub 上的案件與照片一律直接連線，不快取。 */
-const VERSION = 'warranty-app-v2';
+const VERSION = 'warranty-app-v3';
 const SHELL = ['./', 'index.html', 'app.js', 'config.js', 'manifest.webmanifest',
   'icon-192.png', 'icon-512.png', 'icon-maskable-512.png', 'apple-touch-icon.png'];
 

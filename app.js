@@ -201,30 +201,27 @@ async function modelList(key){if(S.models)return S.models;
   try{const r=await fetch(`${GEM}/models?pageSize=200&key=${encodeURIComponent(key)}`);if(!r.ok)return [];
     const list=((await r.json()).models||[]).filter(m=>(m.supportedGenerationMethods||[]).includes('generateContent')).map(m=>m.name.replace(/^models\//,''))
       .filter(n=>/flash/.test(n)&&!/image|tts|live|audio|embed|exp|thinking/.test(n));
-    const score=n=>(/lite/.test(n)?0:2)+(/preview/.test(n)?0:1)+(/latest/.test(n)?1:0);
+    const score=n=>(/preview/.test(n)?0:4)+(/lite/.test(n)?0:2)+(/latest/.test(n)?0:1);
     list.sort((a,b)=>score(b)-score(a)||b.localeCompare(a,undefined,{numeric:true}));return (S.models=list)}catch(e){return []}}
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 async function geminiRead(blob){return geminiJSON(AI_PROMPT,[blob],1800)}
 async function geminiJSON(prompt,blobs,side){const key=S.settings.geminiKey;
   const parts=[{text:prompt}];for(const b of blobs){const small=await compress(b,side||1400,0.85);parts.push({inline_data:{mime_type:'image/jpeg',data:(await toDataURL(small)).split(',')[1]}})}
   const body={contents:[{role:'user',parts}],generationConfig:{temperature:0,responseMimeType:'application/json'}};
-  const first=S.settings.geminiModel||'gemini-flash-latest';
-  const tried=new Set();let r=null,lastMsg='',lastStatus=0,model=first;
-  for(let attempt=0;attempt<5;attempt++){
-    if(attempt>0){const alts=(await modelList(key)).filter(m=>!tried.has(m));model=alts[0]||model;await wait(attempt*800)}
-    tried.add(model);
-    try{r=await gemPost(model,body,key)}catch(e){if(attempt>=2)throw new Error('連不上 Google AI，請確認網路後按「重新辨識」。');continue}
-    if(r.ok){if(model!==S.settings.geminiModel&&model!==first){S.settings.geminiModel=model;saveSettings().catch(()=>{})}break}
-    lastStatus=r.status;try{lastMsg=((await r.json()).error||{}).message||''}catch(e){lastMsg=''}
-    if(r.status===400&&/API key/i.test(lastMsg))throw new Error('AI 金鑰不正確，請到右上角「設定」重新貼上。');
-    if(r.status===403)throw new Error('AI 金鑰沒有權限，請確認金鑰是否已停用。');
-    if(r.status===429&&/quota|exhausted|per day|limit/i.test(lastMsg)&&!/demand|overload/i.test(lastMsg)&&attempt>=1)break;
-    /* 404 找不到模型、429 太頻繁、500/503 忙線：換模型再試 */
-    r=null}
-  if(!r||!r.ok){
-    if(lastStatus===429)throw new Error('AI 免費額度暫時用完，請過幾分鐘再按「重新辨識」，或明天再試。');
-    if(lastStatus===503||lastStatus===500||/demand|overload|unavailable/i.test(lastMsg))throw new Error('Google AI 目前忙線中，請過一下再按「重新辨識」。');
-    throw new Error('AI 辨識失敗（'+(lastStatus||'連線')+'），請稍後按「重新辨識」。')}
+  let list=await modelList(key);if(!list.length)list=['gemini-2.5-flash','gemini-2.5-flash-lite','gemini-2.0-flash','gemini-flash-latest','gemini-flash-lite-latest'];
+  const order=[...new Set([S.settings.geminiModel,...list].filter(Boolean))].slice(0,10);
+  const tried=[];let r=null,ok='';
+  for(const model of order){
+    try{r=await gemPost(model,body,key)}catch(e){tried.push(model+':網路');r=null;continue}
+    if(r.ok){ok=model;break}
+    let msg='';try{msg=((await r.json()).error||{}).message||''}catch(e){}
+    tried.push(`${model}:${r.status}`);S.aiLastMsg=msg;
+    if(r.status===400&&/API key|api_key|credential/i.test(msg))throw new Error('AI 金鑰不正確，請到右上角「設定」重新貼上。');
+    if(r.status===401||r.status===403)throw new Error('AI 金鑰沒有權限（'+r.status+'），請確認金鑰是否已停用。');
+    r=null;await wait(300)}
+  if(!r){const e=new Error(tried.every(t=>/:429$/.test(t))?'這組 AI 金鑰的免費額度目前都用完了，請過幾分鐘再按「重新辨識」。':'Google AI 目前忙線或額度不足，請過一下再按「重新辨識」。');
+    e.detail=tried.join('  ')+(S.aiLastMsg?'｜'+S.aiLastMsg.slice(0,160):'');throw e}
+  if(ok!==S.settings.geminiModel){S.settings.geminiModel=ok;saveSettings().catch(()=>{})}
   const j=await r.json();const text=((((j.candidates||[])[0]||{}).content||{}).parts||[]).map(p=>p.text||'').join('');
   const m=text.match(/\{[\s\S]*\}/);if(!m)throw new Error('AI 沒有讀出內容，可以換一張清楚的照片再試。');
   return JSON.parse(m[0])}
@@ -251,7 +248,8 @@ async function runAI(blob,auto){const draft=S.draft;if(!draft||!aiReady())return
     if(S.draft!==draft)return;renderForm();
     filled.forEach(k=>{const el=k.startsWith('m-')?$('#'+k):$('#f-'+k)||document.querySelector(`[name="${k}"]`);const w=el&&el.closest('.fld');if(w)w.classList.add('flash')});
     setMsg(filled.length?`已自動填入 ${filled.length} 個欄位（淺藍底色），請對照服務單核對。`:'AI 沒有讀到可以填的內容，請手動填寫。')}
-  catch(e){draft._aiBusy=false;setMsg(e.message||'辨識失敗',true);const b2=$('#ai-run');if(b2)b2.disabled=false}}
+  catch(e){draft._aiBusy=false;setMsg((e.message||'辨識失敗')+(e.detail?`
+（技術資訊：${e.detail}）`:''),true);const b2=$('#ai-run');if(b2)b2.disabled=false}}
 
 /* ---------- 專用連結登入（像展示台的分享連結：打開一次，這台裝置就記住） ---------- */
 const NAME_KEY='wr_name';
@@ -266,11 +264,9 @@ async function login(token){S.token=token.trim();
 function myName(){try{return localStorage.getItem(NAME_KEY)||''}catch(e){return ''}}
 function startSession(){S.me={login:myName()};setMode()}
 function logout(){try{localStorage.removeItem(TOKEN_KEY)}catch(e){}S.token='';S.me=null;S.gh=null;S.reports=[];S.loaded=false;setMode();renderLogin()}
-function setMode(){const m=$('#mode');
-  if(!S.me){m.innerHTML='';$('#nav').style.display='none';return}
-  $('#nav').style.display='';$('#nav-new').style.display=S.canWrite?'':'none';
-  m.innerHTML=`<span>${esc(S.me.login)}${S.canWrite?'':'・唯讀'}</span><button class="btn ghost sm" id="share">分享給同事</button><button class="btn ghost sm" id="me">設定</button>`;
-  $('#share').onclick=shareDialog;$('#me').onclick=meDialog}
+function setMode(){const me=$('#me');
+  if(!S.me){me.hidden=true;$('#nav').style.display='none';return}
+  $('#nav').style.display='';$('#nav-new').style.display=S.canWrite?'':'none';me.hidden=false;me.onclick=meDialog}
 function shareDialog(){const link=linkFor(S.token);
   $('#modal').innerHTML=`<div class="mask"><div class="dlg" role="dialog" aria-modal="true"><h3>分享給同事</h3>
     <p style="margin:0">把這個連結用 LINE 私訊傳給同事。對方打開一次，他的手機或電腦就會記住，之後直接用，不用登入。</p>
@@ -280,12 +276,14 @@ function shareDialog(){const link=linkFor(S.token);
   $('#m-no').onclick=()=>$('#modal').innerHTML='';
   $('#m-copy').onclick=async()=>{try{await navigator.clipboard.writeText(link);toast('已複製，可以貼到 LINE')}catch(e){const t=$('#lnk');t.focus();t.select();toast('請按 Ctrl+C（手機長按）複製')}}}
 function meDialog(){
-  $('#modal').innerHTML=`<div class="mask"><div class="dlg" role="dialog" aria-modal="true"><h3>這台裝置的設定</h3>
+  $('#modal').innerHTML=`<div class="mask"><div class="dlg" role="dialog" aria-modal="true"><h3>設定</h3>
     <div class="fld"><label for="nm">你的名字（會記在你填的案件上）</label><input id="nm" value="${esc(myName())}"></div>
-    <div class="fld"><label for="gk">AI 辨識金鑰（Google Gemini，全部同事共用，設定一次即可）</label><input id="gk" type="password" autocomplete="off" placeholder="${aiReady()?'已設定，要更換才需重新貼上':'AIza 開頭的金鑰'}"></div>
+    <div class="set-row"><button class="btn" id="m-share" type="button">分享給同事</button>${isStandalone()?'':'<button class="btn" id="m-inst" type="button">安裝到手機／桌面</button>'}</div>
+    <div class="fld"><label for="gk">AI 辨識金鑰（Google Gemini，全部同事共用，設定一次即可）</label><input id="gk" type="password" autocomplete="off" placeholder="${aiReady()?'已設定，要更換才需重新貼上':'貼上 Google AI Studio 的金鑰'}"></div>
     <p class="muted" style="margin:0">取得金鑰：用 Google 帳號登入 <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>，按「Create API key」，複製貼上。</p>
     <div class="row-btn" style="justify-content:space-between"><button class="btn danger" id="m-out">讓這台裝置登出</button><span style="display:flex;gap:8px"><button class="btn" id="m-no">取消</button><button class="btn pri" id="m-ok">儲存</button></span></div></div></div>`;
   $('#m-no').onclick=()=>$('#modal').innerHTML='';
+  $('#m-share').onclick=shareDialog;const mi=$('#m-inst');if(mi)mi.onclick=()=>S.install();
   $('#m-ok').onclick=async()=>{const v=$('#nm').value.trim();if(!v){toast('請填名字','bad');return}try{localStorage.setItem(NAME_KEY,v)}catch(e){}S.me.login=v;setMode();
     const k=$('#gk').value.trim();
     if(k){const ok=$('#m-ok');ok.disabled=true;ok.textContent='確認金鑰中…';
@@ -473,7 +471,7 @@ values 只填照片上真的讀得到的；溫濕度計量的是出風口時填 
     if(S.draft!==draft)return;
     if(filled.length){renderForm();filled.forEach(k=>{const el=$(k.startsWith('m-')?'#'+k:'#f-'+k);const w=el&&el.closest('.fld');if(w)w.classList.add('flash')})}else{renderPhotos();updateLive()}
     msg(`AI 已整理照片類別與說明${filled.length?`，並從照片讀出 ${filled.length} 個欄位（淺藍底色）`:''}，請確認。`)}
-  catch(e){msg('照片辨識失敗：'+(e.message||''))}}
+  catch(e){msg('照片辨識失敗：'+(e.message||'')+(e.detail?`（${e.detail}）`:''))}}
 async function addPhotos(files){const draft=S.draft;
   const items=files.map(f=>{const have=new Set(draft.photos.map(p=>p.cat));const cat=profileOf(draft).photos.find(k=>!have.has(k))||'其他';
     const p={cat,caption:'',uploading:true,preview:URL.createObjectURL(f)};draft.photos.push(p);return [f,p]});
@@ -630,34 +628,39 @@ function exportCSV(rows){const cols=[['服務單號','no'],['狀態','status'],[
   const csv='﻿'+[cols.map(c=>c[0]).join(','),...rows.map(r=>cols.map(c=>cell(typeof c[1]==='function'?c[1](r):r[c[1]])).join(','))].join('\r\n');
   saveFile(new Blob([csv],{type:'text/csv;charset=utf-8'}),`保固維修案件_${today()}.csv`);toast('CSV 已下載')}
 
-/* ---------- 安裝成 App ---------- */
+/* ---------- 安裝成 App（在「設定」裡） ---------- */
+function isStandalone(){return ['standalone','minimal-ui','window-controls-overlay','fullscreen'].some(m=>window.matchMedia(`(display-mode: ${m})`).matches)||navigator.standalone===true}
 (function installSetup(){
   if('serviceWorker' in navigator&&location.protocol==='https:')navigator.serviceWorker.register('sw.js').catch(()=>{});
-  const btn=$('#install');if(!btn)return;
-  const standalone=['standalone','minimal-ui','window-controls-overlay','fullscreen'].some(m=>window.matchMedia(`(display-mode: ${m})`).matches)||navigator.standalone===true;
-  if(standalone){try{localStorage.setItem('wr_installed','1')}catch(e){}return}
-  try{if(localStorage.getItem('wr_installed'))return}catch(e){}
-  if(navigator.getInstalledRelatedApps)navigator.getInstalledRelatedApps().then(a=>{if(a&&a.length)btn.hidden=true,btn.dataset.done='1'}).catch(()=>{});
   const ua=navigator.userAgent;
   const isIOS=/iPhone|iPad|iPod/.test(ua)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
   const isMacSafari=!isIOS&&/Macintosh/.test(ua)&&/Safari/.test(ua)&&!/Chrome|Chromium|Edg|Firefox/.test(ua);
   let deferred=null;
-  window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferred=e;btn.hidden=false});
-  window.addEventListener('appinstalled',()=>{btn.hidden=true;try{localStorage.setItem('wr_installed','1')}catch(e){}deferred=null;toast('已安裝，之後可從桌面或主畫面開啟')});
-  if(isIOS||isMacSafari)btn.hidden=false;
-  else setTimeout(()=>{if(!deferred&&!btn.dataset.done)btn.hidden=false},3000);   // 瀏覽器沒提供安裝視窗時，按下去顯示手動步驟
+  window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferred=e});
+  window.addEventListener('appinstalled',()=>{deferred=null;toast('已安裝，之後可從桌面或主畫面開啟')});
   const share='<span class="shot"><svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M8 10V2M5 4.5 8 1.5l3 3M4 7H3v7h10V7h-1" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>';
   function guide(){const steps=isIOS?[
       '請用 <b>Safari</b> 開啟這個網址（LINE 或其他 App 內開的話，先點右上角選「用 Safari 開啟」）',
-      `點畫面下方（iPad 在右上方）的分享按鈕 ${share}`,
-      '往下滑，點「<b>加入主畫面</b>」',
-      '點右上角「<b>新增</b>」，主畫面就會出現「保固回報」圖示']
-    :isMacSafari?['點 Safari 選單列的「檔案」','選「<b>加入 Dock</b>」','按「加入」，Dock 和應用程式資料夾就會出現「保固回報」']
-    :/Android/.test(ua)?['請用 <b>Chrome</b> 開啟這個網址','點右上角「⋮」選單','點「<b>安裝應用程式</b>」或「加到主畫面」','按「安裝」，主畫面就會出現「保固回報」圖示']
-    :['請用 <b>Chrome</b> 或 <b>Edge</b> 開啟這個網址','點網址列右側的安裝圖示，或右上角「⋮」選單 →「投放、儲存及分享」→「<b>安裝網頁為應用程式</b>」','按「安裝」，桌面和開始選單就會出現「保固回報」'];
-    $('#modal').innerHTML=`<div class="mask"><div class="dlg" role="dialog" aria-modal="true"><h3>安裝成 App</h3><ol>${steps.map(s=>`<li>${s}</li>`).join('')}</ol>
-      <p class="muted" style="margin:0">${isIOS||isMacSafari?"安裝後第一次從圖示開啟，要再貼一次權杖（Apple 裝置的 App 和瀏覽器分開記錄），之後就會記住。":"安裝後點圖示就會用獨立視窗開啟，登入狀態會保留。"}</p><div class="row-btn"><button class="btn" id="m-done">我已經安裝了，不再顯示</button><button class="btn pri" id="m-no">知道了</button></div></div></div>`;
-    $('#m-no').onclick=()=>$('#modal').innerHTML='';
-    $('#m-done').onclick=()=>{try{localStorage.setItem('wr_installed','1')}catch(e){}btn.hidden=true;$('#modal').innerHTML=''}}
-  btn.onclick=async()=>{if(deferred){deferred.prompt();const r=await deferred.userChoice.catch(()=>null);deferred=null;if(r&&r.outcome==='accepted')btn.hidden=true}else guide()};
+      `點分享按鈕 ${share}`,
+      '往下滑，點「<b>加入主畫面</b>」，確認「以網頁 App 開啟」是打開的',
+      '點「<b>新增</b>」，主畫面就會出現「保固回報」圖示']
+    :isMacSafari?['點 Safari 選單列的「檔案」','選「<b>加入 Dock</b>」','按「加入」']
+    :/Android/.test(ua)?['請用 <b>Chrome</b> 開啟這個網址','點右上角「⋮」選單','點「<b>安裝應用程式</b>」或「加到主畫面」']
+    :['請用 <b>Chrome</b> 或 <b>Edge</b> 開啟這個網址','點網址列右側的安裝圖示，或「⋮」選單 →「投放、儲存及分享」→「<b>安裝網頁為應用程式</b>」'];
+    $('#modal').innerHTML=`<div class="mask"><div class="dlg" role="dialog" aria-modal="true"><h3>安裝到手機／桌面</h3><ol>${steps.map(s=>`<li>${s}</li>`).join('')}</ol>
+      <p class="muted" style="margin:0">${isIOS||isMacSafari?'第一次從圖示開啟時，要再貼一次專用連結（Apple 裝置的 App 和 Safari 分開記錄），之後就會記住。':'安裝後點圖示就會用獨立視窗開啟。'}</p><div class="row-btn"><button class="btn pri" id="m-no">知道了</button></div></div></div>`;
+    $('#m-no').onclick=()=>$('#modal').innerHTML=''}
+  S.install=async()=>{if(deferred){$('#modal').innerHTML='';deferred.prompt();await deferred.userChoice.catch(()=>null);deferred=null}else guide()};
 })();
+
+/* ---------- 照片點開放大 ---------- */
+function openViewer(src,title){if(!src)return;
+  const box=document.createElement('div');box.className='lb';box.setAttribute('role','dialog');
+  box.innerHTML=`<div class="lb-top"><span>${esc(title||'')}</span><span style="display:flex;gap:8px"><a class="btn sm" href="${esc(src)}" target="_blank" rel="noopener">開新視窗</a><button class="btn sm" type="button">關閉</button></span></div><div class="lb-body"><img alt="" src="${esc(src)}"></div>`;
+  const close=()=>{box.remove();document.removeEventListener('keydown',esc_)};const esc_=e=>{if(e.key==='Escape')close()};
+  box.querySelector('button').onclick=close;document.addEventListener('keydown',esc_);
+  const body=box.querySelector('.lb-body');body.querySelector('img').onclick=()=>body.classList.toggle('zoom');
+  document.body.append(box)}
+document.addEventListener('click',e=>{const img=e.target.closest('#fp-thumb img, .ph .im img, .pv img');if(!img||!img.src||img.closest('.lb'))return;
+  const capEl=img.closest('.pg-photo')?.querySelector('.cap');const cap=(capEl?[...capEl.childNodes].map(n=>n.textContent.trim()).filter(Boolean).join('　'):'')||img.closest('.ph')?.querySelector('select')?.value||(img.closest('#fp-thumb,.pg-scan')?'服務單':'');
+  openViewer(img.currentSrc||img.src,cap)});
