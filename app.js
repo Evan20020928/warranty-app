@@ -204,17 +204,23 @@ async function modelList(key){if(S.models)return S.models;
     const score=n=>(/preview/.test(n)?0:4)+(/lite/.test(n)?0:2)+(/latest/.test(n)?0:1);
     list.sort((a,b)=>score(b)-score(a)||b.localeCompare(a,undefined,{numeric:true}));return (S.models=list)}catch(e){return []}}
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
-async function geminiRead(blob,onStatus){return geminiJSON(AI_PROMPT,[blob],1800,onStatus)}
-async function geminiJSON(prompt,blobs,side,onStatus){const key=S.settings.geminiKey;
+async function geminiRead(blob,onStatus,ctl){return geminiJSON(AI_PROMPT,[blob],1800,onStatus,ctl)}
+async function geminiJSON(prompt,blobs,side,onStatus,ctl){ctl=ctl||{};const key=S.settings.geminiKey;
   const parts=[{text:prompt}];for(const b of blobs){const small=await compress(b,side||1400,0.85);parts.push({inline_data:{mime_type:'image/jpeg',data:(await toDataURL(small)).split(',')[1]}})}
   const body={contents:[{role:'user',parts}],generationConfig:{temperature:0,responseMimeType:'application/json'}};
   let list=await modelList(key);if(!list.length)list=['gemini-flash-latest','gemini-flash-lite-latest'];
   let order=[...new Set([S.settings.geminiModel,...list].filter(Boolean))].slice(0,10);
   const dead=new Set();let tried=[],r=null,ok='';
-  /* 免費方案尖峰時常回 503 忙線：整輪都失敗就等一下再試，最多 4 輪（約 1 分鐘） */
-  for(let round=0;round<4&&!ok;round++){
-    if(round>0){const sec=[0,5,12,20][round];if(onStatus)onStatus(`Google AI 忙線中，${sec} 秒後自動重試（第 ${round+1}/4 次）…`);await wait(sec*1000);
-      if(onStatus)onStatus(`AI 正在讀取（第 ${round+1}/4 次）…`)}
+  /* 免費方案尖峰時常回 503 忙線：會一直自動重試到成功（最多 30 分鐘，App 要保持開著），可按「停止重試」。
+     忙線被拒絕的請求不會產生費用；之後每輪只試最有希望的 3 個模型，減少請求次數 */
+  const started=Date.now();
+  for(let round=0;!ok;round++){
+    if(round>0){if(Date.now()-started>30*60000)break;
+      const sec=[0,10,20,30][round]||60;
+      for(let left=sec;left>0;left--){if(ctl.stop)break;if(onStatus)onStatus(`Google AI 忙線中，${left} 秒後自動重試（已試 ${round} 輪）。App 保持開著就會一直重試，你可以先填其他欄位。`);await wait(1000)}
+      if(ctl.stop){const e=new Error('已停止自動重試，可以稍後再按「重新辨識」。');throw e}
+      if(onStatus)onStatus(`AI 正在讀取（第 ${round+1} 輪）…`);
+      order=order.filter(m=>!dead.has(m)).slice(0,3)}
     tried=[];
     for(const model of order){if(dead.has(model))continue;
       try{r=await gemPost(model,body,key)}catch(e){tried.push(model+':網路');r=null;continue}
@@ -225,8 +231,8 @@ async function geminiJSON(prompt,blobs,side,onStatus){const key=S.settings.gemin
       if(r.status===401||r.status===403)throw new Error('AI 金鑰沒有權限（'+r.status+'），請確認金鑰是否已停用。');
       if(r.status===404||r.status===400||(r.status===429&&!/demand|overload/i.test(msg)))dead.add(model);   // 不存在或沒有免費額度的模型，下一輪跳過
       r=null;await wait(250)}
-    if([...order].every(m=>dead.has(m)))break}
-  if(!ok){const e=new Error(tried.length&&tried.every(t=>/:429$/.test(t))?'這組 AI 金鑰的免費額度目前用完了，請晚一點再按「重新辨識」。':'Google AI 免費方案現在太多人用，試了約 1 分鐘都在忙線，請稍後再按「重新辨識」。');
+    if(!order.length||order.every(m=>dead.has(m)))break}
+  if(!ok){const e=new Error(tried.length&&tried.every(t=>/:429$/.test(t))?'這組 AI 金鑰的免費額度目前用完了，請晚一點再按「重新辨識」。':'Google AI 免費方案一直忙線，自動重試 30 分鐘仍未成功，請稍後再按「重新辨識」。');
     e.detail=tried.join('  ')+(S.aiLastMsg?'｜'+S.aiLastMsg.slice(0,120):'');throw e}
   if(ok!==S.settings.geminiModel){S.settings.geminiModel=ok;saveSettings().catch(()=>{})}
   const j=await r.json();const text=((((j.candidates||[])[0]||{}).content||{}).parts||[]).map(p=>p.text||'').join('');
@@ -249,14 +255,19 @@ function applyAI(r,j,auto){const filled=[];const can=k=>!auto||!(r._touched&&r._
   return filled}
 async function runAI(blob,auto){const draft=S.draft;if(!draft||!aiReady())return;
   const setMsg=(t,bad)=>{draft._aiMsg=t;draft._aiBad=!!bad;const o=$('#ai-out');if(o&&S.draft===draft){o.textContent=t;o.className='ai-out'+(bad?' bad':'')}};
-  draft._aiBusy=true;const b=$('#ai-run');if(b)b.disabled=true;setMsg('AI 正在讀服務單，約 5～20 秒…');
+  if(draft._aiCtl)draft._aiCtl.stop=true;const ctl=draft._aiCtl={};
+  draft._aiBusy=true;aiButton(draft);setMsg('AI 正在讀服務單，約 5～20 秒…');
   try{if(!blob){const u=await photoURL(draft.formPhoto.path);blob=await (await fetch(u)).blob()}
-    const j=await geminiRead(blob,t=>setMsg(t));settle();const filled=applyAI(draft,j,auto);draft._aiBusy=false;
+    const j=await geminiRead(blob,t=>{if(draft._aiCtl===ctl)setMsg(t)},ctl);if(draft._aiCtl!==ctl)return;settle();const filled=applyAI(draft,j,auto);draft._aiBusy=false;draft._aiCtl=null;
     if(S.draft!==draft)return;renderForm();
     filled.forEach(k=>{const el=k.startsWith('m-')?$('#'+k):$('#f-'+k)||document.querySelector(`[name="${k}"]`);const w=el&&el.closest('.fld');if(w)w.classList.add('flash')});
     setMsg(filled.length?`已自動填入 ${filled.length} 個欄位（淺藍底色），請對照服務單核對。`:'AI 沒有讀到可以填的內容，請手動填寫。')}
-  catch(e){draft._aiBusy=false;setMsg((e.message||'辨識失敗')+(e.detail?`
-（技術資訊：${e.detail}）`:''),true);const b2=$('#ai-run');if(b2)b2.disabled=false}}
+  catch(e){if(draft._aiCtl!==ctl)return;draft._aiBusy=false;draft._aiCtl=null;setMsg((e.message||'辨識失敗')+(e.detail?`
+（技術資訊：${e.detail}）`:''),!ctl.stop);aiButton(draft)}}
+function stopAI(d){if(!d)return;if(d._aiCtl)d._aiCtl.stop=true;if(d._phCtl)d._phCtl.stop=true}
+function aiButton(draft){const b=$('#ai-run');if(!b||S.draft!==draft)return;
+  if(draft._aiBusy){b.textContent='停止重試';b.disabled=false;b.onclick=()=>{if(draft._aiCtl)draft._aiCtl.stop=true;b.disabled=true}}
+  else{b.textContent='重新辨識';b.disabled=!draft.formPhoto;b.onclick=()=>runAI(S.formBlob,false)}}
 
 /* ---------- 專用連結登入（像展示台的分享連結：打開一次，這台裝置就記住） ---------- */
 const NAME_KEY='wr_name';
@@ -351,7 +362,7 @@ function route(){if(!S.me)return renderLogin();const h=location.hash||'#list';
   if(h.startsWith('#edit-')){const n=+h.slice(6);const r=S.reports.find(x=>x.number===n);if(!r)return notFound();
     if(!(S.view==='form'&&S.editingNo===n&&S.draft)){S.draft=clone(r);S.editingNo=n;S.formBlob=null}
     S.view='form';return renderForm()}
-  S.draft=null;S.editingNo=null;
+  stopAI(S.draft);S.draft=null;S.editingNo=null;
   if(h.startsWith('#r-')){const r=S.reports.find(x=>x.number===+h.slice(3));if(!r)return notFound();S.view='detail';return renderDetail(r)}
   S.view='list';renderList()}
 
@@ -397,7 +408,7 @@ function renderForm(){const r=S.draft;const isNew=S.editingNo===null;
   <div class="card"><h2><span class="n">01</span>服務單影本<small>拍下紙本服務單，總公司可直接看原件</small></h2>
     <div class="formphoto"><div class="thumb" id="fp-thumb">${r.formUploading?'上傳中…':r.formPhoto?imgTag(r.formPhoto):'尚未上傳'}</div>
       <div class="fp-side"><label class="drop" id="fp-drop"><input type="file" accept="image/*" id="fp-file">${r.formPhoto?'重新拍攝／更換服務單照片':'點這裡拍照或選擇服務單照片'}</label>
-        ${aiReady()?`<div class="ai-row"><button class="btn sm" id="ai-run" type="button"${r.formPhoto&&!r._aiBusy?'':' disabled'}>重新辨識</button><span class="ai-out${r._aiBad?' bad':''}" id="ai-out">${esc(r._aiMsg||'上傳服務單後，AI 會自動讀出產品、機型、機號、故障情況等並填入。')}</span></div>`
+        ${aiReady()?`<div class="ai-row"><button class="btn sm" id="ai-run" type="button"${r.formPhoto||r._aiBusy?'':' disabled'}>${r._aiBusy?'停止重試':'重新辨識'}</button><span class="ai-out${r._aiBad?' bad':''}" id="ai-out">${esc(r._aiMsg||'上傳服務單後，AI 會自動讀出產品、機型、機號、故障情況等並填入。')}</span></div>`
           :`<div class="ai-out" id="ai-out">還沒設定 AI 辨識，請管理者到右上角「設定」貼上 Gemini 金鑰。</div>`}</div></div></div>
   <div class="card"><h2><span class="n">02</span>基本資料<small>與服務單相同欄位</small></h2><div class="grid">
     ${F('服務單號','no',{mono:true,ph:'例：003518'})}${F('登記日期','regDate',{type:'date'})}${F('服務日期','serviceDate',{type:'date'})}${F('技術員','tech',{ph:'姓名'})}
@@ -431,7 +442,7 @@ function renderForm(){const r=S.draft;const isNew=S.editingNo===null;
   hydrate($('#app'));renderPhotos();updateLive();
   const form=$('#form');form.addEventListener('input',onFormInput);form.addEventListener('change',onFormInput);
   bindDrop($('#fp-drop'),$('#fp-file'),files=>addFormPhoto(files[0]));
-  const air=$('#ai-run');if(air)air.onclick=()=>runAI(S.formBlob,false);
+  aiButton(r);
   bindDrop($('#ph-drop'),$('#ph-file'),files=>addPhotos(files));
   $('#send').onclick=()=>save(true);$('#draft').onclick=()=>save(false)}
 function onFormInput(e){const t=e.target;const r=S.draft;if(!r)return;
@@ -456,7 +467,7 @@ function bindDrop(zone,input,cb){input.onchange=()=>{if(input.files.length)cb([.
 async function addFormPhoto(file){if(!file)return;const draft=S.draft;draft.formUploading=true;$('#fp-thumb').innerHTML='上傳中…';S.formBlob=file;
   if(aiReady())runAI(file,true);
   try{const ref=await storePhoto(file,draft.key,'服務單 '+(draft.no||''),2200);draft.formPhoto=ref;
-    if(S.draft===draft){$('#fp-thumb').innerHTML=imgTag(ref);const ab=$('#ai-run');if(ab&&!draft._aiBusy)ab.disabled=false;updateLive()}}
+    if(S.draft===draft){$('#fp-thumb').innerHTML=imgTag(ref);aiButton(draft);updateLive()}}
   catch(e){toast('服務單上傳失敗：'+e.message,'bad');if(S.draft===draft)$('#fp-thumb').innerHTML=draft.formPhoto?imgTag(draft.formPhoto):'尚未上傳'}
   finally{draft.formUploading=false;if(S.draft===draft&&$('#fp-thumb')&&$('#fp-thumb').textContent==='上傳中…')$('#fp-thumb').innerHTML=draft.formPhoto?imgTag(draft.formPhoto):'尚未上傳'}}
 /* 現場照片：AI 判斷照片類別、寫說明，並讀出銘牌與儀表上的數字（只填空白欄位） */
@@ -468,7 +479,8 @@ async function analyzePhotos(draft,items){if(!aiReady()||!items.length)return;
 {"photos":[{"i":1,"category":"從這些擇一：${CATS.join('、')}","caption":"一句繁體中文說明，寫出讀到的數值，例如：出風溫濕度 30.1°C／61.9%"}],
 "values":{"model":"","serial":"","ambT":"","ambRH":"","outT":"","outRH":"","current":"","pipeT":"","voltage":""}}
 values 只填照片上真的讀得到的；溫濕度計量的是出風口時填 outT、outRH；讀不到填空字串。`;
-  try{const j=await geminiJSON(prompt,items.map(x=>x[0]),1400,t=>msg('照片：'+t));let n=0;settle();
+  const ctl=draft._phCtl={};
+  try{const j=await geminiJSON(prompt,items.map(x=>x[0]),1400,t=>msg('照片：'+t),ctl);let n=0;settle();
     (j.photos||[]).forEach(o=>{const it=items[(+o.i||0)-1];if(!it)return;const p=it[1];if(!draft.photos.includes(p))return;
       if(CATS.includes(o.category)&&!(p._touched&&p._touched.cat)){p.cat=o.category;n++}
       if(o.caption&&!p.caption&&!(p._touched&&p._touched.caption)){p.caption=String(o.caption).slice(0,120);n++}});
@@ -510,7 +522,7 @@ async function save(send){const r=S.draft;
     else{is=await gh(`${REPO}/issues`,{method:'POST',body:{title:payload.title,body:payload.body,labels:payload.labels}})}
     if(prev&&prev.status!==status)gh(`${REPO}/issues/${is.number}/comments`,{method:'POST',body:{body:`**狀態：${status}**　${obj.log[obj.log.length-1].n}（${S.me.login}）`}}).catch(()=>{});
     const nr=fromIssue(is);const i=S.reports.findIndex(x=>x.number===nr.number);if(i>=0)S.reports[i]=nr;else S.reports.unshift(nr);
-    toast(send?'已送出給總公司':'已儲存');S.view=null;S.draft=null;location.hash='#r-'+nr.number}
+    toast(send?'已送出給總公司':'已儲存');stopAI(r);S.view=null;S.draft=null;location.hash='#r-'+nr.number}
   catch(e){btns.forEach(b=>b.disabled=false);toast('儲存失敗：'+e.message,'bad')}}
 
 /* ---------- report pages ---------- */
