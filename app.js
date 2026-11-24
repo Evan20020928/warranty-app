@@ -204,23 +204,30 @@ async function modelList(key){if(S.models)return S.models;
     const score=n=>(/preview/.test(n)?0:4)+(/lite/.test(n)?0:2)+(/latest/.test(n)?0:1);
     list.sort((a,b)=>score(b)-score(a)||b.localeCompare(a,undefined,{numeric:true}));return (S.models=list)}catch(e){return []}}
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
-async function geminiRead(blob){return geminiJSON(AI_PROMPT,[blob],1800)}
-async function geminiJSON(prompt,blobs,side){const key=S.settings.geminiKey;
+async function geminiRead(blob,onStatus){return geminiJSON(AI_PROMPT,[blob],1800,onStatus)}
+async function geminiJSON(prompt,blobs,side,onStatus){const key=S.settings.geminiKey;
   const parts=[{text:prompt}];for(const b of blobs){const small=await compress(b,side||1400,0.85);parts.push({inline_data:{mime_type:'image/jpeg',data:(await toDataURL(small)).split(',')[1]}})}
   const body={contents:[{role:'user',parts}],generationConfig:{temperature:0,responseMimeType:'application/json'}};
-  let list=await modelList(key);if(!list.length)list=['gemini-2.5-flash','gemini-2.5-flash-lite','gemini-2.0-flash','gemini-flash-latest','gemini-flash-lite-latest'];
-  const order=[...new Set([S.settings.geminiModel,...list].filter(Boolean))].slice(0,10);
-  const tried=[];let r=null,ok='';
-  for(const model of order){
-    try{r=await gemPost(model,body,key)}catch(e){tried.push(model+':網路');r=null;continue}
-    if(r.ok){ok=model;break}
-    let msg='';try{msg=((await r.json()).error||{}).message||''}catch(e){}
-    tried.push(`${model}:${r.status}`);S.aiLastMsg=msg;
-    if(r.status===400&&/API key|api_key|credential/i.test(msg))throw new Error('AI 金鑰不正確，請到右上角「設定」重新貼上。');
-    if(r.status===401||r.status===403)throw new Error('AI 金鑰沒有權限（'+r.status+'），請確認金鑰是否已停用。');
-    r=null;await wait(300)}
-  if(!r){const e=new Error(tried.every(t=>/:429$/.test(t))?'這組 AI 金鑰的免費額度目前都用完了，請過幾分鐘再按「重新辨識」。':'Google AI 目前忙線或額度不足，請過一下再按「重新辨識」。');
-    e.detail=tried.join('  ')+(S.aiLastMsg?'｜'+S.aiLastMsg.slice(0,160):'');throw e}
+  let list=await modelList(key);if(!list.length)list=['gemini-flash-latest','gemini-flash-lite-latest'];
+  let order=[...new Set([S.settings.geminiModel,...list].filter(Boolean))].slice(0,10);
+  const dead=new Set();let tried=[],r=null,ok='';
+  /* 免費方案尖峰時常回 503 忙線：整輪都失敗就等一下再試，最多 4 輪（約 1 分鐘） */
+  for(let round=0;round<4&&!ok;round++){
+    if(round>0){const sec=[0,5,12,20][round];if(onStatus)onStatus(`Google AI 忙線中，${sec} 秒後自動重試（第 ${round+1}/4 次）…`);await wait(sec*1000);
+      if(onStatus)onStatus(`AI 正在讀取（第 ${round+1}/4 次）…`)}
+    tried=[];
+    for(const model of order){if(dead.has(model))continue;
+      try{r=await gemPost(model,body,key)}catch(e){tried.push(model+':網路');r=null;continue}
+      if(r.ok){ok=model;break}
+      let msg='';try{msg=((await r.json()).error||{}).message||''}catch(e){}
+      tried.push(`${model}:${r.status}`);S.aiLastMsg=msg;
+      if(r.status===400&&/API key|api_key|credential/i.test(msg))throw new Error('AI 金鑰不正確，請到右上角「設定」重新貼上。');
+      if(r.status===401||r.status===403)throw new Error('AI 金鑰沒有權限（'+r.status+'），請確認金鑰是否已停用。');
+      if(r.status===404||r.status===400||(r.status===429&&!/demand|overload/i.test(msg)))dead.add(model);   // 不存在或沒有免費額度的模型，下一輪跳過
+      r=null;await wait(250)}
+    if([...order].every(m=>dead.has(m)))break}
+  if(!ok){const e=new Error(tried.length&&tried.every(t=>/:429$/.test(t))?'這組 AI 金鑰的免費額度目前用完了，請晚一點再按「重新辨識」。':'Google AI 免費方案現在太多人用，試了約 1 分鐘都在忙線，請稍後再按「重新辨識」。');
+    e.detail=tried.join('  ')+(S.aiLastMsg?'｜'+S.aiLastMsg.slice(0,120):'');throw e}
   if(ok!==S.settings.geminiModel){S.settings.geminiModel=ok;saveSettings().catch(()=>{})}
   const j=await r.json();const text=((((j.candidates||[])[0]||{}).content||{}).parts||[]).map(p=>p.text||'').join('');
   const m=text.match(/\{[\s\S]*\}/);if(!m)throw new Error('AI 沒有讀出內容，可以換一張清楚的照片再試。');
@@ -244,7 +251,7 @@ async function runAI(blob,auto){const draft=S.draft;if(!draft||!aiReady())return
   const setMsg=(t,bad)=>{draft._aiMsg=t;draft._aiBad=!!bad;const o=$('#ai-out');if(o&&S.draft===draft){o.textContent=t;o.className='ai-out'+(bad?' bad':'')}};
   draft._aiBusy=true;const b=$('#ai-run');if(b)b.disabled=true;setMsg('AI 正在讀服務單，約 5～20 秒…');
   try{if(!blob){const u=await photoURL(draft.formPhoto.path);blob=await (await fetch(u)).blob()}
-    const j=await geminiRead(blob);settle();const filled=applyAI(draft,j,auto);draft._aiBusy=false;
+    const j=await geminiRead(blob,t=>setMsg(t));settle();const filled=applyAI(draft,j,auto);draft._aiBusy=false;
     if(S.draft!==draft)return;renderForm();
     filled.forEach(k=>{const el=k.startsWith('m-')?$('#'+k):$('#f-'+k)||document.querySelector(`[name="${k}"]`);const w=el&&el.closest('.fld');if(w)w.classList.add('flash')});
     setMsg(filled.length?`已自動填入 ${filled.length} 個欄位（淺藍底色），請對照服務單核對。`:'AI 沒有讀到可以填的內容，請手動填寫。')}
@@ -461,7 +468,7 @@ async function analyzePhotos(draft,items){if(!aiReady()||!items.length)return;
 {"photos":[{"i":1,"category":"從這些擇一：${CATS.join('、')}","caption":"一句繁體中文說明，寫出讀到的數值，例如：出風溫濕度 30.1°C／61.9%"}],
 "values":{"model":"","serial":"","ambT":"","ambRH":"","outT":"","outRH":"","current":"","pipeT":"","voltage":""}}
 values 只填照片上真的讀得到的；溫濕度計量的是出風口時填 outT、outRH；讀不到填空字串。`;
-  try{const j=await geminiJSON(prompt,items.map(x=>x[0]),1400);let n=0;settle();
+  try{const j=await geminiJSON(prompt,items.map(x=>x[0]),1400,t=>msg('照片：'+t));let n=0;settle();
     (j.photos||[]).forEach(o=>{const it=items[(+o.i||0)-1];if(!it)return;const p=it[1];if(!draft.photos.includes(p))return;
       if(CATS.includes(o.category)&&!(p._touched&&p._touched.cat)){p.cat=o.category;n++}
       if(o.caption&&!p.caption&&!(p._touched&&p._touched.caption)){p.caption=String(o.caption).slice(0,120);n++}});
