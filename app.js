@@ -622,7 +622,7 @@ function exportCSV(rows){const cols=[['服務單號','no'],['狀態','status'],[
 (function installSetup(){
   if('serviceWorker' in navigator&&location.protocol==='https:')navigator.serviceWorker.register('sw.js').catch(()=>{});
   const btn=$('#install');if(!btn)return;
-  const standalone=window.matchMedia('(display-mode: standalone)').matches||navigator.standalone===true;
+  const standalone=['standalone','minimal-ui','window-controls-overlay','fullscreen'].some(m=>window.matchMedia(`(display-mode: ${m})`).matches)||navigator.standalone===true;
   if(standalone)return;
   const ua=navigator.userAgent;
   const isIOS=/iPhone|iPad|iPod/.test(ua)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
