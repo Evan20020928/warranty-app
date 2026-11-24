@@ -196,23 +196,35 @@ const AI_PROMPT=`這是一張「貫捷科技服務單」（米多力 MEDOLE 產�
 "compOn":"檢修情況寫在壓縮機啟動下測量填 true，否則 false"}
 若寫出風濕度「與環境相同」，環境濕度填同一個數字；若寫管溫「與現場相同」，環境溫度填同一個數字。`;
 async function gemPost(model,body,key){return fetch(`${GEM}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})}
-async function pickModel(key){try{const r=await fetch(`${GEM}/models?pageSize=200&key=${encodeURIComponent(key)}`);if(!r.ok)return '';
-  const list=((await r.json()).models||[]).filter(m=>(m.supportedGenerationMethods||[]).includes('generateContent')).map(m=>m.name.replace(/^models\//,''))
-    .filter(n=>/flash/.test(n)&&!/image|tts|live|audio|embed|exp/.test(n));
-  const score=n=>(/lite/.test(n)?0:2)+(/preview/.test(n)?0:1);
-  list.sort((a,b)=>score(b)-score(a)||b.localeCompare(a,undefined,{numeric:true}));return list[0]||''}catch(e){return ''}}
+/* 可用的 Flash 模型清單（快取在這次開啟期間），忙線時會換下一個 */
+async function modelList(key){if(S.models)return S.models;
+  try{const r=await fetch(`${GEM}/models?pageSize=200&key=${encodeURIComponent(key)}`);if(!r.ok)return [];
+    const list=((await r.json()).models||[]).filter(m=>(m.supportedGenerationMethods||[]).includes('generateContent')).map(m=>m.name.replace(/^models\//,''))
+      .filter(n=>/flash/.test(n)&&!/image|tts|live|audio|embed|exp|thinking/.test(n));
+    const score=n=>(/lite/.test(n)?0:2)+(/preview/.test(n)?0:1)+(/latest/.test(n)?1:0);
+    list.sort((a,b)=>score(b)-score(a)||b.localeCompare(a,undefined,{numeric:true}));return (S.models=list)}catch(e){return []}}
+const wait=ms=>new Promise(r=>setTimeout(r,ms));
 async function geminiRead(blob){return geminiJSON(AI_PROMPT,[blob],1800)}
 async function geminiJSON(prompt,blobs,side){const key=S.settings.geminiKey;
   const parts=[{text:prompt}];for(const b of blobs){const small=await compress(b,side||1400,0.85);parts.push({inline_data:{mime_type:'image/jpeg',data:(await toDataURL(small)).split(',')[1]}})}
   const body={contents:[{role:'user',parts}],generationConfig:{temperature:0,responseMimeType:'application/json'}};
-  let model=S.settings.geminiModel||'gemini-flash-latest';let r;
-  try{r=await gemPost(model,body,key)}catch(e){throw new Error('連不上 Google AI，請確認網路。')}
-  if(r.status===404){const m2=await pickModel(key);if(m2&&m2!==model){model=m2;r=await gemPost(model,body,key);if(r.ok){S.settings.geminiModel=model;saveSettings().catch(()=>{})}}}
-  if(!r.ok){let msg='';try{msg=((await r.json()).error||{}).message||''}catch(e){}
-    if(r.status===400&&/API key/i.test(msg))throw new Error('AI 金鑰不正確，請到右上角「設定」重新貼上。');
+  const first=S.settings.geminiModel||'gemini-flash-latest';
+  const tried=new Set();let r=null,lastMsg='',lastStatus=0,model=first;
+  for(let attempt=0;attempt<5;attempt++){
+    if(attempt>0){const alts=(await modelList(key)).filter(m=>!tried.has(m));model=alts[0]||model;await wait(attempt*800)}
+    tried.add(model);
+    try{r=await gemPost(model,body,key)}catch(e){if(attempt>=2)throw new Error('連不上 Google AI，請確認網路後按「重新辨識」。');continue}
+    if(r.ok){if(model!==S.settings.geminiModel&&model!==first){S.settings.geminiModel=model;saveSettings().catch(()=>{})}break}
+    lastStatus=r.status;try{lastMsg=((await r.json()).error||{}).message||''}catch(e){lastMsg=''}
+    if(r.status===400&&/API key/i.test(lastMsg))throw new Error('AI 金鑰不正確，請到右上角「設定」重新貼上。');
     if(r.status===403)throw new Error('AI 金鑰沒有權限，請確認金鑰是否已停用。');
-    if(r.status===429)throw new Error('AI 免費額度暫時用完，請過一分鐘再試，或改天再按「重新辨識」。');
-    throw new Error('AI 辨識失敗：'+(msg||r.status))}
+    if(r.status===429&&/quota|exhausted|per day|limit/i.test(lastMsg)&&!/demand|overload/i.test(lastMsg)&&attempt>=1)break;
+    /* 404 找不到模型、429 太頻繁、500/503 忙線：換模型再試 */
+    r=null}
+  if(!r||!r.ok){
+    if(lastStatus===429)throw new Error('AI 免費額度暫時用完，請過幾分鐘再按「重新辨識」，或明天再試。');
+    if(lastStatus===503||lastStatus===500||/demand|overload|unavailable/i.test(lastMsg))throw new Error('Google AI 目前忙線中，請過一下再按「重新辨識」。');
+    throw new Error('AI 辨識失敗（'+(lastStatus||'連線')+'），請稍後按「重新辨識」。')}
   const j=await r.json();const text=((((j.candidates||[])[0]||{}).content||{}).parts||[]).map(p=>p.text||'').join('');
   const m=text.match(/\{[\s\S]*\}/);if(!m)throw new Error('AI 沒有讀出內容，可以換一張清楚的照片再試。');
   return JSON.parse(m[0])}
@@ -623,15 +635,17 @@ function exportCSV(rows){const cols=[['服務單號','no'],['狀態','status'],[
   if('serviceWorker' in navigator&&location.protocol==='https:')navigator.serviceWorker.register('sw.js').catch(()=>{});
   const btn=$('#install');if(!btn)return;
   const standalone=['standalone','minimal-ui','window-controls-overlay','fullscreen'].some(m=>window.matchMedia(`(display-mode: ${m})`).matches)||navigator.standalone===true;
-  if(standalone)return;
+  if(standalone){try{localStorage.setItem('wr_installed','1')}catch(e){}return}
+  try{if(localStorage.getItem('wr_installed'))return}catch(e){}
+  if(navigator.getInstalledRelatedApps)navigator.getInstalledRelatedApps().then(a=>{if(a&&a.length)btn.hidden=true,btn.dataset.done='1'}).catch(()=>{});
   const ua=navigator.userAgent;
   const isIOS=/iPhone|iPad|iPod/.test(ua)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
   const isMacSafari=!isIOS&&/Macintosh/.test(ua)&&/Safari/.test(ua)&&!/Chrome|Chromium|Edg|Firefox/.test(ua);
   let deferred=null;
   window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferred=e;btn.hidden=false});
-  window.addEventListener('appinstalled',()=>{btn.hidden=true;deferred=null;toast('已安裝，之後可從桌面或主畫面開啟')});
+  window.addEventListener('appinstalled',()=>{btn.hidden=true;try{localStorage.setItem('wr_installed','1')}catch(e){}deferred=null;toast('已安裝，之後可從桌面或主畫面開啟')});
   if(isIOS||isMacSafari)btn.hidden=false;
-  else setTimeout(()=>{if(!deferred)btn.hidden=false},3000);   // 瀏覽器沒提供安裝視窗時，按下去顯示手動步驟
+  else setTimeout(()=>{if(!deferred&&!btn.dataset.done)btn.hidden=false},3000);   // 瀏覽器沒提供安裝視窗時，按下去顯示手動步驟
   const share='<span class="shot"><svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M8 10V2M5 4.5 8 1.5l3 3M4 7H3v7h10V7h-1" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>';
   function guide(){const steps=isIOS?[
       '請用 <b>Safari</b> 開啟這個網址（LINE 或其他 App 內開的話，先點右上角選「用 Safari 開啟」）',
@@ -642,7 +656,8 @@ function exportCSV(rows){const cols=[['服務單號','no'],['狀態','status'],[
     :/Android/.test(ua)?['請用 <b>Chrome</b> 開啟這個網址','點右上角「⋮」選單','點「<b>安裝應用程式</b>」或「加到主畫面」','按「安裝」，主畫面就會出現「保固回報」圖示']
     :['請用 <b>Chrome</b> 或 <b>Edge</b> 開啟這個網址','點網址列右側的安裝圖示，或右上角「⋮」選單 →「投放、儲存及分享」→「<b>安裝網頁為應用程式</b>」','按「安裝」，桌面和開始選單就會出現「保固回報」'];
     $('#modal').innerHTML=`<div class="mask"><div class="dlg" role="dialog" aria-modal="true"><h3>安裝成 App</h3><ol>${steps.map(s=>`<li>${s}</li>`).join('')}</ol>
-      <p class="muted" style="margin:0">${isIOS||isMacSafari?"安裝後第一次從圖示開啟，要再貼一次權杖（Apple 裝置的 App 和瀏覽器分開記錄），之後就會記住。":"安裝後點圖示就會用獨立視窗開啟，登入狀態會保留。"}</p><div class="row-btn"><button class="btn" id="m-no">知道了</button></div></div></div>`;
-    $('#m-no').onclick=()=>$('#modal').innerHTML=''}
+      <p class="muted" style="margin:0">${isIOS||isMacSafari?"安裝後第一次從圖示開啟，要再貼一次權杖（Apple 裝置的 App 和瀏覽器分開記錄），之後就會記住。":"安裝後點圖示就會用獨立視窗開啟，登入狀態會保留。"}</p><div class="row-btn"><button class="btn" id="m-done">我已經安裝了，不再顯示</button><button class="btn pri" id="m-no">知道了</button></div></div></div>`;
+    $('#m-no').onclick=()=>$('#modal').innerHTML='';
+    $('#m-done').onclick=()=>{try{localStorage.setItem('wr_installed','1')}catch(e){}btn.hidden=true;$('#modal').innerHTML=''}}
   btn.onclick=async()=>{if(deferred){deferred.prompt();const r=await deferred.userChoice.catch(()=>null);deferred=null;if(r&&r.outcome==='accepted')btn.hidden=true}else guide()};
 })();
