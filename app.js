@@ -152,48 +152,78 @@ async function refresh(silent){try{S.reports=await loadReports();S.loaded=true;S
   catch(e){S.loaded=true;S.note='讀取案件失敗：'+e.message;if(e.status===401){logout();return}}
   if(!(S.view==='form'&&S.draft))route()}
 
-/* ---------- login ---------- */
+/* ---------- 專用連結登入（像展示台的分享連結：打開一次，這台裝置就記住） ---------- */
+const NAME_KEY='wr_name';
+function linkFor(t){return location.origin+location.pathname+'#k='+t}
+function tokenFromText(txt){const m=String(txt||'').match(/(?:#|&|\?)k=([A-Za-z0-9_]+)/)||String(txt||'').trim().match(/^((?:github_pat|ghp)_[A-Za-z0-9_]+)$/);return m?m[1]:''}
 async function login(token){S.token=token.trim();
   const me=await gh('/user');
-  let repo;try{repo=await gh(REPO)}catch(e){if(e.status===404){const err=new Error(`已登入 @${me.login}，但看不到資料庫 ${CFG.owner}/${CFG.repo}。請管理者把你加為協作者，再到 GitHub 通知或 Email 按「接受邀請」。若權杖是「Fine-grained」類型，請改建「Classic」權杖並勾選 repo。`);err.keep=true;throw err}throw e}
-  S.me=me;S.canWrite=!!(repo.permissions&&repo.permissions.push);
+  let repo;try{repo=await gh(REPO)}catch(e){if(e.status===404||e.status===403){const err=new Error('這組連結打不開案件資料庫，可能已被停用。請向管理者索取新的連結。');throw err}throw e}
+  S.gh=me;S.canWrite=!!(repo.permissions&&repo.permissions.push);
   try{localStorage.setItem(TOKEN_KEY,S.token)}catch(e){}
-  setMode();S.labelsP=S.canWrite?ensureLabels():Promise.resolve()}
-function logout(){try{localStorage.removeItem(TOKEN_KEY)}catch(e){}S.token='';S.me=null;S.reports=[];S.loaded=false;setMode();renderLogin()}
+  S.labelsP=S.canWrite?ensureLabels():Promise.resolve()}
+function myName(){try{return localStorage.getItem(NAME_KEY)||''}catch(e){return ''}}
+function startSession(){S.me={login:myName()};setMode()}
+function logout(){try{localStorage.removeItem(TOKEN_KEY)}catch(e){}S.token='';S.me=null;S.gh=null;S.reports=[];S.loaded=false;setMode();renderLogin()}
 function setMode(){const m=$('#mode');
   if(!S.me){m.innerHTML='';$('#nav').style.display='none';return}
   $('#nav').style.display='';$('#nav-new').style.display=S.canWrite?'':'none';
-  m.innerHTML=`<img src="${esc(S.me.avatar_url)}" alt=""><span>@${esc(S.me.login)}${S.canWrite?'':'・唯讀'}</span><button class="btn ghost sm" id="logout">登出</button>`;
-  $('#logout').onclick=logout}
+  m.innerHTML=`<span>${esc(S.me.login)}${S.canWrite?'':'・唯讀'}</span><button class="btn ghost sm" id="share">分享給同事</button><button class="btn ghost sm" id="me">設定</button>`;
+  $('#share').onclick=shareDialog;$('#me').onclick=meDialog}
+function shareDialog(){const link=linkFor(S.token);
+  $('#modal').innerHTML=`<div class="mask"><div class="dlg" role="dialog" aria-modal="true"><h3>分享給同事</h3>
+    <p style="margin:0">把這個連結用 LINE 私訊傳給同事。對方打開一次，他的手機或電腦就會記住，之後直接用，不用登入。</p>
+    <textarea id="lnk" readonly style="min-height:90px;font-family:var(--font-mono);font-size:12px">${esc(link)}</textarea>
+    <p class="muted" style="margin:0">拿到這個連結的人都能看和填寫案件，請只傳給同事，不要貼到群組或公開地方。若連結外流，管理者到 GitHub 刪掉金鑰、換一組新的就會失效。</p>
+    <div class="row-btn"><button class="btn" id="m-no">關閉</button><button class="btn pri" id="m-copy">複製連結</button></div></div></div>`;
+  $('#m-no').onclick=()=>$('#modal').innerHTML='';
+  $('#m-copy').onclick=async()=>{try{await navigator.clipboard.writeText(link);toast('已複製，可以貼到 LINE')}catch(e){const t=$('#lnk');t.focus();t.select();toast('請按 Ctrl+C（手機長按）複製')}}}
+function meDialog(){
+  $('#modal').innerHTML=`<div class="mask"><div class="dlg" role="dialog" aria-modal="true"><h3>這台裝置的設定</h3>
+    <div class="fld"><label for="nm">你的名字（會記在你填的案件上）</label><input id="nm" value="${esc(myName())}"></div>
+    <div class="row-btn" style="justify-content:space-between"><button class="btn danger" id="m-out">讓這台裝置登出</button><span style="display:flex;gap:8px"><button class="btn" id="m-no">取消</button><button class="btn pri" id="m-ok">儲存</button></span></div></div></div>`;
+  $('#m-no').onclick=()=>$('#modal').innerHTML='';
+  $('#m-ok').onclick=()=>{const v=$('#nm').value.trim();if(!v){toast('請填名字','bad');return}try{localStorage.setItem(NAME_KEY,v)}catch(e){}S.me.login=v;setMode();$('#modal').innerHTML='';toast('已更新')};
+  $('#m-out').onclick=()=>{$('#modal').innerHTML='';logout()}}
+function renderName(){S.view='name';
+  $('#app').innerHTML=`<div class="login card"><h2>歡迎使用保固維修回報</h2>
+    <p class="lead">先填你的名字，之後你填的案件和處理紀錄都會記上這個名字。只要填一次。</p>
+    <form id="name-form" class="fld"><label for="nm1">你的名字</label><input id="nm1" placeholder="例：王小明" required><button class="btn pri" type="submit">開始使用</button></form></div>`;
+  $('#nm1').focus();
+  $('#name-form').onsubmit=async e=>{e.preventDefault();const v=$('#nm1').value.trim();if(!v)return;try{localStorage.setItem(NAME_KEY,v)}catch(e){}
+    startSession();S.view=null;if(!location.hash||location.hash.startsWith('#k='))location.hash='#list';await refresh()}}
 function renderLogin(msg){S.view='login';
-  const tokenURL='https://github.com/settings/tokens/new?scopes=repo&description='+encodeURIComponent('保固維修回報 App');
   $('#app').innerHTML=`<div class="login card">
-    <h2>登入保固維修回報</h2>
-    <p class="lead">案件和照片存在公司的私人 GitHub 資料庫 <span class="mono">${esc(CFG.owner)}/${esc(CFG.repo)}</span>，只有被加入的同事看得到。第一次使用請照下面 3 步，之後這台裝置會記住。</p>
-    <ol class="steps">
-      <li><b>有 GitHub 帳號</b>：沒有的話到 <a href="https://github.com/signup" target="_blank" rel="noopener">github.com/signup</a> 免費註冊，把帳號名稱告訴管理者。</li>
-      <li><b>接受邀請</b>：管理者邀請後，到 GitHub 通知或 Email 按「Accept invitation」。</li>
-      <li><b>建立權杖並貼上</b>：<a href="${tokenURL}" target="_blank" rel="noopener">點這裡建立權杖</a>，Expiration 選「No expiration」或一年，確認 <span class="mono">repo</span> 有勾選，按最下方 Generate token，複製 ghp_ 開頭那串貼到下面。</li>
-    </ol>
+    <h2>保固維修回報</h2>
+    <p class="lead">請用管理者傳給你的<b>專用連結</b>打開這個 App，打開一次這台裝置就會記住。</p>
+    <p class="lead" style="margin-top:-6px">如果是從手機主畫面的圖示打開、看到這個畫面，請把那個連結整段複製，貼到下面：</p>
     <form id="login-form" class="fld">
-      <label for="tok">GitHub 權杖</label>
-      <input id="tok" type="password" autocomplete="off" placeholder="ghp_xxxxxxxxxxxxxxxx" required>
-      <button class="btn pri" id="login-btn" type="submit">登入</button>
+      <label for="tok">專用連結</label>
+      <input id="tok" autocomplete="off" placeholder="https://evan20020928.github.io/warranty-app/#k=…" required>
+      <button class="btn pri" id="login-btn" type="submit">開始使用</button>
     </form>
     <div id="login-msg" class="${msg?'dx bad':''}">${esc(msg||'')}</div>
-    <p class="fine">權杖只存在這台裝置的瀏覽器，等同你的 GitHub 密碼，請不要傳給別人。換手機或清除瀏覽器資料後要重新貼一次。</p>
+    <p class="fine">管理者第一次使用：把 GitHub 金鑰（github_pat_ 開頭）直接貼在上面即可，進去後按右上角「分享給同事」產生連結。</p>
   </div>`;
-  $('#login-form').onsubmit=async e=>{e.preventDefault();const b=$('#login-btn');b.disabled=true;b.textContent='確認中…';
-    try{await login($('#tok').value);location.hash=location.hash&&location.hash!=='#login'?location.hash:'#list';S.view=null;await refresh()}
-    catch(err){if(!err.keep){S.token=''}const box=$('#login-msg');box.className='dx bad';box.textContent=err.message;b.disabled=false;b.textContent='登入'}}}
+  $('#login-form').onsubmit=async e=>{e.preventDefault();const t=tokenFromText($('#tok').value);const box=$('#login-msg');
+    if(!t){box.className='dx bad';box.textContent='這不是正確的專用連結，請整段複製再貼一次。';return}
+    const b=$('#login-btn');b.disabled=true;b.textContent='確認中…';
+    try{await enter(t)}catch(err){S.token='';box.className='dx bad';box.textContent=err.message;b.disabled=false;b.textContent='開始使用'}}}
+async function enter(t){await login(t);
+  if(!myName())return renderName();
+  startSession();S.view=null;if(!location.hash||location.hash.startsWith('#k='))location.hash='#list';await refresh()}
 
 /* ---------- init + router ---------- */
 (async function init(){
-  let t='';try{t=localStorage.getItem(TOKEN_KEY)||''}catch(e){}
+  const fromLink=tokenFromText(location.hash);
+  if(fromLink)history.replaceState(null,'',location.pathname+location.search+'#list');
+  let t=fromLink;if(!t){try{t=localStorage.getItem(TOKEN_KEY)||''}catch(e){}}
   if(!t){setMode();renderLogin();return}
-  try{await login(t);await refresh()}catch(e){S.token='';setMode();renderLogin(e.status===401?'權杖已失效，請重新建立一組貼上。':e.message)}
+  try{await enter(t)}catch(e){S.token='';setMode();renderLogin(e.status===401?'這組連結已失效，請向管理者索取新的連結。':e.message)}
 })();
-window.addEventListener('hashchange',()=>{if(S.me)route()});
+window.addEventListener('hashchange',()=>{const t=tokenFromText(location.hash);
+  if(t){history.replaceState(null,'',location.pathname+location.search+'#list');enter(t).catch(e=>{S.token='';S.me=null;setMode();renderLogin(e.message)});return}
+  if(S.me)route()});
 window.addEventListener('resize',()=>fitPreview());
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&S.me&&S.view!=='form')refresh(true)});
 function notFound(){S.view='missing';$('#app').innerHTML='<div class="card empty"><p>找不到這筆案件。</p><a class="btn" href="#list">回到案件總覽</a></div>'}
@@ -339,7 +369,7 @@ async function save(send){const r=S.draft;
     let is;
     if(prev)is=await gh(`${REPO}/issues/${S.editingNo}`,{method:'PATCH',body:payload});
     else{is=await gh(`${REPO}/issues`,{method:'POST',body:{title:payload.title,body:payload.body,labels:payload.labels}})}
-    if(prev&&prev.status!==status)gh(`${REPO}/issues/${is.number}/comments`,{method:'POST',body:{body:`**狀態：${status}**　${obj.log[obj.log.length-1].n}（@${S.me.login}）`}}).catch(()=>{});
+    if(prev&&prev.status!==status)gh(`${REPO}/issues/${is.number}/comments`,{method:'POST',body:{body:`**狀態：${status}**　${obj.log[obj.log.length-1].n}（${S.me.login}）`}}).catch(()=>{});
     const nr=fromIssue(is);const i=S.reports.findIndex(x=>x.number===nr.number);if(i>=0)S.reports[i]=nr;else S.reports.unshift(nr);
     toast(send?'已送出給總公司':'已儲存');S.view=null;S.draft=null;location.hash='#r-'+nr.number}
   catch(e){btns.forEach(b=>b.disabled=false);toast('儲存失敗：'+e.message,'bad')}}
@@ -383,7 +413,7 @@ function renderDetail(r){const miss=missing(r);
     <aside class="side">
       <div class="card"><h2>案件狀態</h2>
         <div class="pills"><span class="pill s-${esc(r.status)}">${esc(r.status)}</span>${r.urgency==='急件'?'<span class="pill s-需補件">急件</span>':''}</div>
-        <div class="meta"><span>填報人：@${esc(r.createdBy||'—')}</span><span>建立：${rocDT(r.createdAt)}</span><span>更新：${rocDT(r.updatedAt)}</span><span>案件編號：#${r.number}</span></div>
+        <div class="meta"><span>填報人：${esc(r.createdBy||'—')}</span><span>建立：${rocDT(r.createdAt)}</span><span>更新：${rocDT(r.updatedAt)}</span><span>案件編號：#${r.number}</span></div>
         ${miss.length?`<div class="dx bad" style="margin-top:10px"><b>缺件</b><span>${esc(miss.join('、'))}</span></div>`:''}
       </div>
       ${S.canWrite?`<div class="card"><h2>總公司處理<small>更新狀態並留言給中部</small></h2>
@@ -395,7 +425,7 @@ function renderDetail(r){const miss=missing(r);
         <button class="btn" id="copy">複製文字摘要（貼 LINE／Email）</button>
         ${S.canWrite?`<a class="btn" href="#edit-${r.number}">編輯回報內容</a>`:''}
       </div>
-      <div class="card"><h2>處理紀錄</h2><ul class="log">${r.log.slice().reverse().map(l=>`<li><time>${rocDT(l.t)}</time>　<span class="pill s-${esc(l.s)}">${esc(l.s)}</span><p>${esc(l.n||'')}${l.by?`　— @${esc(l.by)}`:''}</p></li>`).join('')||'<li>尚無紀錄</li>'}</ul></div>
+      <div class="card"><h2>處理紀錄</h2><ul class="log">${r.log.slice().reverse().map(l=>`<li><time>${rocDT(l.t)}</time>　<span class="pill s-${esc(l.s)}">${esc(l.s)}</span><p>${esc(l.n||'')}${l.by?`　— ${esc(l.by)}`:''}</p></li>`).join('')||'<li>尚無紀錄</li>'}</ul></div>
     </aside></div>`;
   hydrate($('#pv'));fitPreview();
   $('#pdf').onclick=()=>exportPDF(r);$('#copy').onclick=()=>copySummary(r);
@@ -411,7 +441,7 @@ async function hqUpdate(r){const st=$('#hq-status').value,note=$('#hq-note').val
     cur.log=cur.log.slice(-40);cur.log.push({t:now,by:S.me.login,s:st,n:msg});
     const obj=clone(cur);['number','url','issueUser'].forEach(k=>delete obj[k]);
     const is=await gh(`${REPO}/issues/${r.number}`,{method:'PATCH',body:{title:issueTitle(obj),body:issueBody(obj),labels:labelsFor(obj),state:st==='已結案'?'closed':'open'}});
-    gh(`${REPO}/issues/${r.number}/comments`,{method:'POST',body:{body:`**狀態：${st}**${note&&noteChanged?`\n\n${note}`:''}\n\n— @${S.me.login}`}}).catch(()=>{});
+    gh(`${REPO}/issues/${r.number}/comments`,{method:'POST',body:{body:`**狀態：${st}**${note&&noteChanged?`\n\n${note}`:''}\n\n— ${S.me.login}`}}).catch(()=>{});
     const nr=fromIssue(is);const i=S.reports.findIndex(x=>x.number===nr.number);if(i>=0)S.reports[i]=nr;
     toast('已更新狀態');$('#hq-note').value=note;renderDetail(nr)}
   catch(e){btn.disabled=false;toast('更新失敗：'+e.message,'bad')}}
