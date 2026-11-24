@@ -6,5 +6,7 @@ window.WARRANTY_CONFIG = {
   repo: 'warranty-data',   // 資料 repo 名稱（必須是 Private）
   branch: 'main',          // 照片存放的分支
   label: '保固回報',        // 每筆案件 Issue 都會貼上的標籤
-  branchName: '中部分公司'  // 報告上顯示的填報單位
+  branchName: '米多力中部分公司',               // 填報單位
+  fromCompany: '中與興業有限公司',               // 填報公司
+  toCompany: '貫捷科技股份有限公司／米多力節能有限公司'  // 回報對象（總公司）
 };

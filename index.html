@@ -154,7 +154,7 @@ main{max-width:1280px;margin:0 auto;padding:20px}
 .formphoto .thumb{aspect-ratio:4/3;border-radius:8px;border:1px solid var(--line);background:var(--bg);overflow:hidden;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:13px}
 .formphoto .thumb img{width:100%;height:100%;object-fit:cover}
 .ai-out{font-size:13px;color:var(--muted);margin-top:8px}
-.photos{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:12px}
+.photos{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-bottom:12px}
 .ph{border:1px solid var(--line);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;background:var(--surface)}
 .ph .im{aspect-ratio:4/3;background:var(--bg);position:relative}
 .ph .im img{width:100%;height:100%;object-fit:cover;display:block}
@@ -175,8 +175,8 @@ main{max-width:1280px;margin:0 auto;padding:20px}
 
 /* detail */
 .detail{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:20px;align-items:start}
-@media (max-width:1060px){.detail{grid-template-columns:1fr}.detail .side{position:static}}
-.pv{display:flex;flex-direction:column;gap:16px}
+@media (max-width:1060px){.detail{grid-template-columns:minmax(0,1fr)}.detail .side{position:static}}
+.pv{display:flex;flex-direction:column;gap:16px;min-width:0;width:100%}
 .pv-wrap{width:calc(794px * var(--s,1));height:calc(1123px * var(--s,1));box-shadow:0 1px 3px rgba(0,0,0,.12),0 8px 24px rgba(20,30,60,.08);border-radius:2px;overflow:hidden;background:#fff}
 .pv-wrap .pg{transform:scale(var(--s,1));transform-origin:0 0}
 .log{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px;font-size:13px}
@@ -263,12 +263,81 @@ main{max-width:1280px;margin:0 auto;padding:20px}
 .login .fine{font-size:12px;color:var(--muted);margin:14px 0 0}
 .dlg ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:8px}
 .dlg .shot{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border:1px solid var(--line);border-radius:5px;vertical-align:-5px}
+.fp-side{display:flex;flex-direction:column;gap:10px;min-width:0}
+.ai-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.ai-out{font-size:13px;color:var(--muted)}
+.ai-out.bad{color:var(--bad)}
+.dlg .fld{display:flex;flex-direction:column;gap:4px}
+.dlg .fld input{padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.dlg a{color:var(--ink)}
 .formphoto .drop{display:flex;align-items:center;justify-content:center;min-height:80px}
+
+/* 手機版面 */
+@media (max-width:700px){
+  body{font-size:15px}
+  main{padding:12px}
+  .top-in{padding:8px 12px;gap:8px 10px}
+  .brand{flex:1 1 100%;margin-right:0}
+  .brand small{font-size:11px;letter-spacing:0;line-height:1.4}
+  .brand b{font-size:17px}
+  .nav{flex:1 1 auto;gap:6px}
+  .nav .btn,#install{padding:7px 10px;font-size:14px}
+  .mode{flex:1 1 100%;justify-content:flex-start;gap:4px}
+  .mode span{margin-right:auto}
+  .card{padding:14px;border-radius:10px;margin-bottom:12px}
+  .card h2{flex-wrap:wrap;gap:4px 8px}
+  .form-wrap,.detail{gap:12px}
+  .side{position:static}
+  .fld input,.fld select,.fld textarea,.search,.ph select,.ph input,.dlg textarea,.dlg input{font-size:16px}
+  .seg label{padding:7px 10px}
+  .list-head{gap:8px}
+  .list-head h2{flex:1 1 100%}
+  .search{max-width:none;flex:1 1 100%}
+  .chips{gap:6px;flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px;margin-bottom:10px}
+  .chip{padding:6px 10px;flex:none}
+  .chip b{font-size:17px}
+  .row{padding:10px 12px}
+  .formphoto{grid-template-columns:110px 1fr;gap:10px}
+  .formphoto .drop{min-height:0;font-size:14px;padding:12px}
+  .drop{padding:14px}
+  .dlg{padding:16px}
+  .login{margin:8px auto}
+  .login form{grid-template-columns:1fr}
+  .login form .btn{justify-content:center}
+  .actions .btn{padding:10px 14px}
+  .pv{gap:10px}
+
+  /* 報告在手機上改成直式排版（PDF 仍是 A4） */
+  .pv-wrap{width:auto!important;height:auto!important;border-radius:10px}
+  .pv-wrap .pg{transform:none;width:auto;height:auto;padding:16px 14px;gap:12px;font-size:14px}
+  .pv-wrap .pg-head{flex-wrap:wrap;gap:8px;align-items:flex-start}
+  .pv-wrap .pg-co{letter-spacing:0;font-size:11px;line-height:1.5}
+  .pv-wrap .pg h1{font-size:21px;letter-spacing:.04em}
+  .pv-wrap .pg-no{align-items:flex-start;text-align:left;flex-direction:row;flex-wrap:wrap;gap:4px 10px;align-items:baseline}
+  .pv-wrap .pg-no b{font-size:24px}
+  .pv-wrap .kv,.pv-wrap .kv tbody{display:block}
+  .pv-wrap .kv tr{display:grid;grid-template-columns:118px minmax(0,1fr)}
+  .pv-wrap .kv th,.pv-wrap .kv td{width:auto;margin:0 0 -1px 0}
+  .pv-wrap .kv td{border-left:0}
+  .pv-wrap .mgrid{grid-template-columns:repeat(2,1fr)}
+  .pv-wrap .mgrid>div{border-right:1px solid #d3d7e0;border-bottom:1px solid #d3d7e0}
+  .pv-wrap .mgrid>div:nth-child(2n){border-right:0}
+  .pv-wrap .mgrid>div:nth-last-child(-n+2){border-bottom:0}
+  .pv-wrap .mgrid b{font-size:19px}
+  .pv-wrap .insp{max-height:none}
+  .pv-wrap .pg-scan{min-height:0;flex:none}
+  .pv-wrap .pg-scan img{max-height:none;width:100%}
+  .pv-wrap .pg-photos{grid-template-columns:1fr;grid-template-rows:none;flex:none}
+  .pv-wrap .pg-photo .fr{flex:none}
+  .pv-wrap .pg-photo img{max-height:70vh;width:auto}
+  .pv-wrap .pg-photo .cap{min-height:0;font-size:14px}
+  .pv-wrap .pg-foot{flex-wrap:wrap}
+}
 </style>
 </head>
 <body>
 <header class="top"><div class="top-in">
-  <div class="brand"><small>貫捷科技 · 中部分公司 → 北部總公司</small><b>保固維修回報</b></div>
+  <div class="brand"><small id="brand-line">中與興業有限公司／米多力中部分公司 → 貫捷科技股份有限公司／米多力節能有限公司</small><b>保固維修回報</b></div>
   <nav class="nav" id="nav" style="display:none">
     <a class="btn ghost" id="nav-list" href="#list">案件總覽</a>
     <a class="btn pri" id="nav-new" href="#new">＋ 新增回報</a>

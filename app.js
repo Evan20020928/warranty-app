@@ -142,7 +142,7 @@ function issueBody(r){const m=r.meas;const dx=diag(r);const ml=measList(r).filte
   if(r.hqNote)L.push('### 總公司回覆','',r.hqNote,'');
   if(r.formPhoto)L.push('### 服務單影本','',`<img src="${ghBlobURL(r.formPhoto.path)}" width="560">`,'');
   if(r.photos.length){L.push('### 現場照片','');r.photos.forEach((p,i)=>L.push(`**${pad(i+1)}｜${p.cat}**　${p.caption||''}`,'',`<img src="${ghBlobURL(p.path)}" width="420">`,''))}
-  L.push('---',`<sub>此為保固維修回報 App 的資料備份，請到 App 查看與處理：https://medole-warranty.github.io/warranty-app/</sub>`,'',`<!-- WARRANTY-DATA\n${json}\n-->`);
+  L.push('---',`<sub>此為保固維修回報 App 的資料備份，請到 App 查看與處理：${location.origin+location.pathname}</sub>`,'',`<!-- WARRANTY-DATA\n${json}\n-->`);
   return L.join('\n')}
 function fromIssue(is){const mm=(is.body||'').match(DATA_RE);if(!mm)return null;
   let d;try{d=JSON.parse(mm[1])}catch(e){return null}
@@ -173,6 +173,8 @@ async function saveSettings(){const body={message:'更新 App 設定',content:b6
 const aiReady=()=>!!(S.settings&&S.settings.geminiKey);
 
 /* ---------- AI 辨識服務單（Google Gemini） ---------- */
+/* 先讓正在輸入的欄位完成（觸發 change），再填入 AI 結果，避免被舊值蓋回去 */
+function settle(){const a=document.activeElement;if(a&&a!==document.body&&a.blur)a.blur()}
 const GEM='https://generativelanguage.googleapis.com/v1beta';
 const AI_PROMPT=`這是一張「貫捷科技服務單」（米多力 MEDOLE 產品維修服務單）的照片，內容多為手寫。請仔細辨識手寫字，只回傳一個 JSON 物件，不要其他文字。讀不到或空白的欄位填空字串 ""。
 {"no":"右上角紅色印刷的單號，只要數字",
@@ -199,9 +201,10 @@ async function pickModel(key){try{const r=await fetch(`${GEM}/models?pageSize=20
     .filter(n=>/flash/.test(n)&&!/image|tts|live|audio|embed|exp/.test(n));
   const score=n=>(/lite/.test(n)?0:2)+(/preview/.test(n)?0:1);
   list.sort((a,b)=>score(b)-score(a)||b.localeCompare(a,undefined,{numeric:true}));return list[0]||''}catch(e){return ''}}
-async function geminiRead(blob){const key=S.settings.geminiKey;
-  const small=await compress(blob,1800,0.85);const data=(await toDataURL(small)).split(',')[1];
-  const body={contents:[{role:'user',parts:[{text:AI_PROMPT},{inline_data:{mime_type:'image/jpeg',data}}]}],generationConfig:{temperature:0,responseMimeType:'application/json'}};
+async function geminiRead(blob){return geminiJSON(AI_PROMPT,[blob],1800)}
+async function geminiJSON(prompt,blobs,side){const key=S.settings.geminiKey;
+  const parts=[{text:prompt}];for(const b of blobs){const small=await compress(b,side||1400,0.85);parts.push({inline_data:{mime_type:'image/jpeg',data:(await toDataURL(small)).split(',')[1]}})}
+  const body={contents:[{role:'user',parts}],generationConfig:{temperature:0,responseMimeType:'application/json'}};
   let model=S.settings.geminiModel||'gemini-flash-latest';let r;
   try{r=await gemPost(model,body,key)}catch(e){throw new Error('連不上 Google AI，請確認網路。')}
   if(r.status===404){const m2=await pickModel(key);if(m2&&m2!==model){model=m2;r=await gemPost(model,body,key);if(r.ok){S.settings.geminiModel=model;saveSettings().catch(()=>{})}}}
@@ -232,7 +235,7 @@ async function runAI(blob,auto){const draft=S.draft;if(!draft||!aiReady())return
   const setMsg=(t,bad)=>{draft._aiMsg=t;draft._aiBad=!!bad;const o=$('#ai-out');if(o&&S.draft===draft){o.textContent=t;o.className='ai-out'+(bad?' bad':'')}};
   draft._aiBusy=true;const b=$('#ai-run');if(b)b.disabled=true;setMsg('AI 正在讀服務單，約 5～20 秒…');
   try{if(!blob){const u=await photoURL(draft.formPhoto.path);blob=await (await fetch(u)).blob()}
-    const j=await geminiRead(blob);const filled=applyAI(draft,j,auto);draft._aiBusy=false;
+    const j=await geminiRead(blob);settle();const filled=applyAI(draft,j,auto);draft._aiBusy=false;
     if(S.draft!==draft)return;renderForm();
     filled.forEach(k=>{const el=k.startsWith('m-')?$('#'+k):$('#f-'+k)||document.querySelector(`[name="${k}"]`);const w=el&&el.closest('.fld');if(w)w.classList.add('flash')});
     setMsg(filled.length?`已自動填入 ${filled.length} 個欄位（淺藍底色），請對照服務單核對。`:'AI 沒有讀到可以填的內容，請手動填寫。')}
@@ -293,7 +296,7 @@ function renderLogin(msg){S.view='login';
     <p class="lead" style="margin-top:-6px">如果是從手機主畫面的圖示打開、看到這個畫面，請把那個連結整段複製，貼到下面：</p>
     <form id="login-form" class="fld">
       <label for="tok">專用連結</label>
-      <input id="tok" autocomplete="off" placeholder="https://medole-warranty.github.io/warranty-app/#k=…" required>
+      <input id="tok" autocomplete="off" placeholder="https://medole-warranty.github.io/#k=…" required>
       <button class="btn pri" id="login-btn" type="submit">開始使用</button>
     </form>
     <div id="login-msg" class="${msg?'dx bad':''}">${esc(msg||'')}</div>
@@ -394,7 +397,7 @@ function renderForm(){const r=S.draft;const isNew=S.editingNo===null;
     ${F('檢修情況（技術員說明）','inspection',{type:'textarea',cls:'w4',ph:'例：出風濕度為 61%（與環境相同），管溫約 27°C（與現場相同）'})}
   </div><div class="hint" id="dx"></div></div>
   <div class="card"><h2><span class="n">05</span>現場照片<small>每張選類別並寫一句說明，報告會依序排版</small></h2>
-    <div class="photos" id="photos"></div>
+    <div class="photos" id="photos"></div>${aiReady()?`<div class="ai-out" id="ph-ai" style="margin-bottom:10px">${esc(r._phMsg||'加入照片後，AI 會自動判斷類別、寫說明，並讀出銘牌與儀表上的數字。')}</div>`:''}
     <label class="drop" id="ph-drop"><input type="file" accept="image/*" multiple id="ph-file">＋ 拍照或加入現場照片（可一次選多張）</label></div>
   <div class="card"><h2><span class="n">06</span>申請總公司</h2><div class="grid">
     <div class="fld w4"><label>申請事項</label>${seg('request',REQUESTS,r.request)}</div>
@@ -418,7 +421,7 @@ function onFormInput(e){const t=e.target;const r=S.draft;if(!r)return;
   if(t.dataset.f){if(t.type==='radio'){if(t.checked)r[t.dataset.f]=t.value}else r[t.dataset.f]=t.value;(r._touched=r._touched||{})[t.dataset.f]=1;
     if(t.dataset.f==='product'&&e.type==='change'){renderForm();return}}
   else if(t.dataset.m){r.meas[t.dataset.m]=t.type==='checkbox'?t.checked:t.value.trim();(r._touched=r._touched||{})['m-'+t.dataset.m]=1}
-  else if(t.dataset.pi!=null){const p=r.photos[+t.dataset.pi];if(p)p[t.dataset.pk]=t.value}
+  else if(t.dataset.pi!=null){const p=r.photos[+t.dataset.pi];if(p){p[t.dataset.pk]=t.value;(p._touched=p._touched||{})[t.dataset.pk]=1}}
   updateLive()}
 function updateLive(){const r=S.draft;const dx=diag(r);
   $('#dx').innerHTML=!profileOf(r).diag?'':dx.length?dx.map(d=>`<div class="dx ${d.lv}"><b>${d.lv==='bad'?'異常':'正常'}</b><span>${esc(d.t)}</span></div>`).join('')+'<div class="muted">系統依量測值自動提示，僅供參考，報告會一併附上。</div>':'<div class="muted">填入環境與出風濕度、管溫後，會自動提示是否有除濕效果。</div>';
@@ -439,13 +442,34 @@ async function addFormPhoto(file){if(!file)return;const draft=S.draft;draft.form
     if(S.draft===draft){$('#fp-thumb').innerHTML=imgTag(ref);const ab=$('#ai-run');if(ab&&!draft._aiBusy)ab.disabled=false;updateLive()}}
   catch(e){toast('服務單上傳失敗：'+e.message,'bad');if(S.draft===draft)$('#fp-thumb').innerHTML=draft.formPhoto?imgTag(draft.formPhoto):'尚未上傳'}
   finally{draft.formUploading=false;if(S.draft===draft&&$('#fp-thumb')&&$('#fp-thumb').textContent==='上傳中…')$('#fp-thumb').innerHTML=draft.formPhoto?imgTag(draft.formPhoto):'尚未上傳'}}
+/* 現場照片：AI 判斷照片類別、寫說明，並讀出銘牌與儀表上的數字（只填空白欄位） */
+async function analyzePhotos(draft,items){if(!aiReady()||!items.length)return;
+  const msg=t=>{draft._phMsg=t;const o=$('#ph-ai');if(o&&S.draft===draft)o.textContent=t};
+  msg(`AI 正在看 ${items.length} 張照片…`);
+  const prompt=`這是 ${items.length} 張維修現場照片，依上傳順序編號 1 到 ${items.length}。產品：${productLabel(draft)}${draft.model?'，機型 '+draft.model:''}。
+請判斷每張照片拍的是什麼，並讀出照片上的文字與數字（銘牌上的機型、機號；溫濕度計、勾錶、控制面板上的數值）。只回傳一個 JSON 物件，不要其他文字：
+{"photos":[{"i":1,"category":"從這些擇一：${CATS.join('、')}","caption":"一句繁體中文說明，寫出讀到的數值，例如：出風溫濕度 30.1°C／61.9%"}],
+"values":{"model":"","serial":"","ambT":"","ambRH":"","outT":"","outRH":"","current":"","pipeT":"","voltage":""}}
+values 只填照片上真的讀得到的；溫濕度計量的是出風口時填 outT、outRH；讀不到填空字串。`;
+  try{const j=await geminiJSON(prompt,items.map(x=>x[0]),1400);let n=0;settle();
+    (j.photos||[]).forEach(o=>{const it=items[(+o.i||0)-1];if(!it)return;const p=it[1];if(!draft.photos.includes(p))return;
+      if(CATS.includes(o.category)&&!(p._touched&&p._touched.cat)){p.cat=o.category;n++}
+      if(o.caption&&!p.caption&&!(p._touched&&p._touched.caption)){p.caption=String(o.caption).slice(0,120);n++}});
+    const v=j.values||{};const filled=[];
+    ['model','serial'].forEach(k=>{const x=String(v[k]||'').trim();if(x&&!String(draft[k]||'').trim()){draft[k]=x;filled.push(k)}});
+    ['ambT','ambRH','outT','outRH','current','pipeT','voltage'].forEach(k=>{const x=num(v[k]);if(x!=null&&!String(draft.meas[k]||'').trim()){draft.meas[k]=String(x);filled.push('m-'+k)}});
+    if(S.draft!==draft)return;
+    if(filled.length){renderForm();filled.forEach(k=>{const el=$(k.startsWith('m-')?'#'+k:'#f-'+k);const w=el&&el.closest('.fld');if(w)w.classList.add('flash')})}else{renderPhotos();updateLive()}
+    msg(`AI 已整理照片類別與說明${filled.length?`，並從照片讀出 ${filled.length} 個欄位（淺藍底色）`:''}，請確認。`)}
+  catch(e){msg('照片辨識失敗：'+(e.message||''))}}
 async function addPhotos(files){const draft=S.draft;
   const items=files.map(f=>{const have=new Set(draft.photos.map(p=>p.cat));const cat=profileOf(draft).photos.find(k=>!have.has(k))||'其他';
     const p={cat,caption:'',uploading:true,preview:URL.createObjectURL(f)};draft.photos.push(p);return [f,p]});
   if(S.draft===draft){renderPhotos();updateLive()}
   for(const [f,p] of items){try{const ref=await storePhoto(f,draft.key,p.cat,1600);p.path=ref.path}
     catch(e){toast('照片上傳失敗：'+e.message,'bad');draft.photos.splice(draft.photos.indexOf(p),1)}
-    p.uploading=false;const keep=p.preview;delete p.preview;if(S.draft===draft)renderPhotos();setTimeout(()=>URL.revokeObjectURL(keep),5000)}}
+    p.uploading=false;const keep=p.preview;delete p.preview;if(S.draft===draft)renderPhotos();setTimeout(()=>URL.revokeObjectURL(keep),5000)}
+  analyzePhotos(draft,items.filter(([f,p])=>draft.photos.includes(p)))}
 
 async function save(send){const r=S.draft;
   if(r.formUploading||r.photos.some(p=>p.uploading)){toast('照片還在上傳，請稍等幾秒再存。','bad');return}
@@ -453,7 +477,7 @@ async function save(send){const r=S.draft;
     if(need.length){toast('送出前請先填：'+need.map(x=>x[1]).join('、'),'bad');const el=$('#f-'+need[0][0]);if(el)el.focus();return}}
   const btns=[$('#send'),$('#draft')];btns.forEach(b=>b.disabled=true);
   try{await S.labelsP;const now=new Date().toISOString();
-    const obj=clone(r);obj.photos=obj.photos.map(({preview,uploading,...p})=>p);Object.keys(obj).forEach(k=>{if(k.startsWith('_'))delete obj[k]});delete obj.number;delete obj.url;delete obj.issueUser;delete obj.formUploading;
+    const obj=clone(r);obj.photos=obj.photos.map(({preview,uploading,_touched,...p})=>p);Object.keys(obj).forEach(k=>{if(k.startsWith('_'))delete obj[k]});delete obj.number;delete obj.url;delete obj.issueUser;delete obj.formUploading;
     let prev=null;
     if(S.editingNo!==null){const is=await gh(`${REPO}/issues/${S.editingNo}`);prev=fromIssue(is)}
     let status=prev?prev.status:'草稿';
@@ -520,13 +544,33 @@ function renderDetail(r){
       <div class="card actions">
         <button class="btn pri" id="pdf">下載 PDF 報告</button>
         <button class="btn" id="copy">複製文字摘要（貼 LINE／Email）</button>
-        ${S.canWrite?`<a class="btn" href="#edit-${r.number}">編輯回報內容</a>`:''}
+        ${S.canWrite?`<a class="btn" href="#edit-${r.number}">編輯回報內容</a><button class="btn danger" id="del">刪除這筆案件</button>`:''}
       </div>
       <div class="card"><h2>處理紀錄</h2><ul class="log">${r.log.slice().reverse().map(l=>`<li><time>${rocDT(l.t)}</time>　<span class="pill s-${esc(l.s)}">${esc(l.s)}</span><p>${esc(l.n||'')}${l.by?`　— ${esc(l.by)}`:''}</p></li>`).join('')||'<li>尚無紀錄</li>'}</ul></div>
     </aside></div>`;
   hydrate($('#pv'));fitPreview();
   $('#pdf').onclick=()=>exportPDF(r);$('#copy').onclick=()=>copySummary(r);
+  const dl=$('#del');if(dl)dl.onclick=()=>confirmDelete(r);
   const h=$('#hq-save');if(h)h.onclick=()=>hqUpdate(r)}
+function confirmDelete(r){
+  $('#modal').innerHTML=`<div class="mask"><div class="dlg" role="dialog" aria-modal="true"><h3>刪除服務單 ${esc(r.no||'（未編號）')}？</h3>
+    <p style="margin:0">${esc(r.customer||'')} ${esc(productLabel(r))} ${esc(r.model||'')}</p>
+    <p class="muted" style="margin:0">案件內容、照片和處理紀錄會一起刪除，刪除後無法復原。</p>
+    <div class="row-btn"><button class="btn" id="m-no">取消</button><button class="btn danger" id="m-yes">確定刪除</button></div></div></div>`;
+  $('#m-no').onclick=()=>$('#modal').innerHTML='';
+  $('#m-yes').onclick=async()=>{const b=$('#m-yes');b.disabled=true;b.textContent='刪除中…';
+    try{await deleteReport(r);$('#modal').innerHTML='';toast('已刪除');location.hash='#list';route()}
+    catch(e){b.disabled=false;b.textContent='確定刪除';toast('刪除失敗：'+e.message,'bad')}}}
+async function deleteReport(r){
+  let gone=false;
+  try{const is=await gh(`${REPO}/issues/${r.number}`);
+    const res=await gh('/graphql',{method:'POST',body:{query:'mutation($id:ID!){deleteIssue(input:{issueId:$id}){clientMutationId}}',variables:{id:is.node_id}}});
+    gone=!(res&&res.errors&&res.errors.length)}catch(e){}
+  if(!gone)await gh(`${REPO}/issues/${r.number}`,{method:'PATCH',body:{title:'[已刪除]',body:'此案件已在保固維修回報 App 中刪除。',labels:[],state:'closed'}});
+  S.reports=S.reports.filter(x=>x.number!==r.number);
+  for(const p of [r.formPhoto,...r.photos].filter(Boolean)){
+    try{const f=await gh(`${REPO}/contents/${encPath(p.path)}?ref=${encodeURIComponent(CFG.branch)}`);
+      await queued(()=>gh(`${REPO}/contents/${encPath(p.path)}`,{method:'DELETE',body:{message:'刪除照片',sha:f.sha,branch:CFG.branch}}))}catch(e){}}}
 function fitPreview(){const pv=$('#pv');if(!pv)return;pv.style.setProperty('--s',Math.min(1,pv.clientWidth/794).toFixed(4))}
 async function hqUpdate(r){const st=$('#hq-status').value,note=$('#hq-note').value.trim();
   if(st===r.status&&note===(r.hqNote||'')){toast('沒有變更');return}
