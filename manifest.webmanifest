@@ -1,0 +1,17 @@
+{
+ "name": "保固維修回報",
+ "short_name": "保固回報",
+ "lang": "zh-Hant",
+ "description": "中部分公司回報保固維修案件給北部總公司：服務單、現場照片、量測與申請事項。",
+ "id": "./",
+ "start_url": "./",
+ "scope": "./",
+ "display": "standalone",
+ "background_color": "#eef0f4",
+ "theme_color": "#2342a0",
+ "icons": [
+  {"src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+  {"src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+  {"src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+ ]
+}
